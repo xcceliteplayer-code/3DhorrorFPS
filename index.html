@@ -1,1 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Ghost Radar: $1km^2$ Multiplayer Asylum</title>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+    <style>
+        body, html, canvas { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: black; }
+    </style>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
 
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+
+        const createScene = function () {
+            const scene = new BABYLON.Scene(engine);
+            scene.clearColor = new BABYLON.Color3(0, 0, 0);
+            scene.collisionsEnabled = true;
+            scene.gravity = new BABYLON.Vector3(0, -0.15, 0);
+
+            // --- 1. PLAYER & DATA ---
+            const camera = new BABYLON.FreeCamera("mainCamera", new BABYLON.Vector3(0, 5, 0), scene);
+            camera.checkCollisions = true; camera.applyGravity = true;
+            camera.ellipsoid = new BABYLON.Vector3(1, 1.5, 1);
+            camera.speed = 0.4;
+            camera.inventory = ["Flashlight", "Old Key", "Medicine", "Battery"];
+            
+            let playerName = "Player";
+            let isAlive = true;
+            
+            // Kontrol WASD
+            camera.keysUp.push(87); camera.keysDown.push(83);
+            camera.keysLeft.push(65); camera.keysRight.push(68);
+
+            // --- 2. SENTER (FOLLOW CAMERA) ---
+            const flashModel = BABYLON.MeshBuilder.CreateCylinder("flashModel", {diameter: 0.1, height: 0.4}, scene);
+            flashModel.parent = camera;
+            flashModel.position = new BABYLON.Vector3(0.5, -0.4, 0.8);
+            flashModel.rotation.x = Math.PI / 2;
+            
+            const flashlight = new BABYLON.SpotLight("fLight", new BABYLON.Vector3(0,0,0), new BABYLON.Vector3(0,0,1), Math.PI/3, 2, scene);
+            flashlight.parent = flashModel;
+            flashlight.intensity = 0; flashlight.range = 50;
+
+            // --- 3. $1km^2$ CHUNK STREAMING ---
+            const chunkSize = 60; const viewDist = 2; const chunks = {};
+            const createChunk = (x, z) => {
+                const key = `${x},${z}`;
+                const g = BABYLON.MeshBuilder.CreateGround("g"+key, {width: chunkSize, height: chunkSize}, scene);
+                g.position.set(x*chunkSize, 0, z*chunkSize); g.checkCollisions = true;
+                const m = new BABYLON.StandardMaterial("m"+key, scene);
+                m.diffuseColor = new BABYLON.Color3(0.1, 0.1, 0.1); g.material = m;
+                chunks[key] = g;
+            };
+
+            // --- 4. MONSTER ---
+            const monMgr = new BABYLON.SpriteManager("monMgr", "assets/monster.png", 1, 512, scene);
+            const monster = new BABYLON.Sprite("monster", monMgr);
+            monster.position = new BABYLON.Vector3(20, 3, 40); monster.size = 6;
+
+            // --- 5. UI SYSTEM (MULTIPLAYER + INV + DEATH) ---
+            const adt = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+
+            // Lobby Utama
+            const lobbyRect = new BABYLON.GUI.Rectangle();
+            lobbyRect.width = "100%"; lobbyRect.height = "100%"; lobbyRect.background = "black";
+            adt.addControl(lobbyRect);
+
+            const stack = new BABYLON.GUI.StackPanel();
+            lobbyRect.addControl(stack);
+
+            const nameInp = new BABYLON.GUI.InputText();
+            nameInp.width = "300px"; nameInp.height = "40px"; nameInp.color = "white"; nameInp.placeholderText = "Enter Name...";
+            stack.addControl(nameInp);
+
+            const btnS = BABYLON.GUI.Button.CreateSimpleButton("s", "START MISSION");
+            btnS.width = "300px"; btnS.height = "50px"; btnS.color = "white"; btnS.background = "red"; btnS.top = "10px";
+            btnS.onPointerUpObservable.add(() => { if(nameInp.text) { playerName = nameInp.text; startGame(); } });
+            stack.addControl(btnS);
+
+            const btnM = BABYLON.GUI.Button.CreateSimpleButton("m", "MULTIPLAYER");
+            btnM.width = "300px"; btnM.height = "50px"; btnM.background = "blue"; btnM.color = "white"; btnM.top = "20px";
+            btnM.onPointerUpObservable.add(() => { if(nameInp.text) { mPanel.isVisible = true; stack.isVisible = false; } });
+            stack.addControl(btnM);
+
+            // Multiplayer Panel
+            const mPanel = new BABYLON.GUI.StackPanel(); mPanel.isVisible = false; lobbyRect.addControl(mPanel);
+            const createR = BABYLON.GUI.Button.CreateSimpleButton("c", "CREATE ROOM");
+            createR.width = "300px"; createR.height = "50px"; createR.background = "green";
+            createR.onPointerUpObservable.add(() => {
+                playerName = nameInp.text; roomUI.isVisible = true; mPanel.isVisible = false;
+                roomCodeTxt.text = "ROOM: " + Math.random().toString(36).substring(2, 7).toUpperCase();
+            });
+            mPanel.addControl(createR);
+
+            const roomUI = new BABYLON.GUI.Rectangle(); roomUI.width = "400px"; roomUI.height = "300px"; roomUI.background = "#111"; roomUI.isVisible = false;
+            lobbyRect.addControl(roomUI);
+            const roomCodeTxt = new BABYLON.GUI.TextBlock(); roomCodeTxt.color = "yellow"; roomCodeTxt.top = "-100px"; roomUI.addControl(roomCodeTxt);
+            const startM = BABYLON.GUI.Button.CreateSimpleButton("sm", "START MATCH");
+            startM.width = "200px"; startM.height = "50px"; startM.background = "red"; startM.onPointerUpObservable.add(() => startGame());
+            roomUI.addControl(startM);
+
+            // Inventory & Settings
+            const invPanel = new BABYLON.GUI.Rectangle(); invPanel.width = "300px"; invPanel.height = "400px"; invPanel.background = "rgba(0,0,0,0.9)"; invPanel.isVisible = false;
+            adt.addControl(invPanel);
+            const invList = new BABYLON.GUI.StackPanel(); invPanel.addControl(invList);
+            
+            const setBtn = BABYLON.GUI.Button.CreateSimpleButton("st", "⚙️");
+            setBtn.width = "50px"; setBtn.height = "50px"; setBtn.horizontalAlignment = 0; setBtn.verticalAlignment = 0; setBtn.left="10px"; setBtn.top="10px";
+            setBtn.onPointerUpObservable.add(() => { 
+                invPanel.isVisible = !invPanel.isVisible; 
+                if(invPanel.isVisible) {
+                    document.exitPointerLock();
+                    invList.children.slice().forEach(c => invList.removeControl(c));
+                    camera.inventory.forEach(i => {
+                        const b = BABYLON.GUI.Button.CreateSimpleButton("bi", i);
+                        b.height = "40px"; b.color = "white"; invList.addControl(b);
+                    });
+                }
+            });
+            adt.addControl(setBtn);
+
+            // Death Screen
+            const dScreen = new BABYLON.GUI.Rectangle(); dScreen.width = "100%"; dScreen.height = "100%"; dScreen.background = "rgba(100,0,0,0.8)"; dScreen.isVisible = false; adt.addControl(dScreen);
+            const dTxt = new BABYLON.GUI.TextBlock(); dTxt.color = "white"; dScreen.addControl(dTxt);
+
+            // --- 6. LOGIC ---
+            function startGame() {
+                lobbyRect.isVisible = false; camera.attachControl(canvas, true); canvas.requestPointerLock(); flashlight.intensity = 5;
+            }
+
+            window.addEventListener("keydown", (e) => {
+                if(!isAlive) return;
+                if(e.shiftKey) camera.speed = 0.8; // Sprint
+                if(e.keyCode === 32 && camera.position.y <= 5.1) camera.cameraDirection.y += 0.4; // Jump
+                if(e.key.toLowerCase() === "r") flashlight.intensity = flashlight.intensity === 0 ? 5 : 0;
+            });
+            window.addEventListener("keyup", (e) => { if(!e.shiftKey) camera.speed = 0.4; });
+
+            scene.onBeforeRenderObservable.add(() => {
+                if(lobbyRect.isVisible || !isAlive) return;
+                
+                // Streaming Map
+                const pX = Math.round(camera.position.x / chunkSize);
+                const pZ = Math.round(camera.position.z / chunkSize);
+                for(let x=pX-viewDist; x<=pX+viewDist; x++) {
+                    for(let z=pZ-viewDist; z<=pZ+viewDist; z++) {
+                        if(!chunks[`${x},${z}`]) createChunk(x,z);
+                    }
+                }
+
+                // Chase & Kill
+                const dist = BABYLON.Vector3.Distance(monster.position, camera.position);
+                if(dist < 50 && dist > 1.8) {
+                    const dir = camera.position.subtract(monster.position); dir.y = 0;
+                    monster.position.addInPlace(dir.normalize().scale(0.06));
+                }
+                if(dist < 2) {
+                    isAlive = false; camera.detachControl(); document.exitPointerLock();
+                    dTxt.text = playerName.toUpperCase() + " WAS SLAIN BY MONSTER\n\nF5 TO RESTART";
+                    dScreen.isVisible = true;
+                }
+            });
+
+            return scene;
+        };
+
+        const scene = createScene();
+        engine.runRenderLoop(() => scene.render());
+        window.addEventListener("resize", () => engine.resize());
+    </script>
+</body>
+</html>
