@@ -32,11 +32,10 @@
             let playerName = "Player";
             let isAlive = true;
             
-            // Kontrol WASD
             camera.keysUp.push(87); camera.keysDown.push(83);
             camera.keysLeft.push(65); camera.keysRight.push(68);
 
-            // --- 2. SENTER (FOLLOW CAMERA) ---
+            // --- 2. SENTER ---
             const flashModel = BABYLON.MeshBuilder.CreateCylinder("flashModel", {diameter: 0.1, height: 0.4}, scene);
             flashModel.parent = camera;
             flashModel.position = new BABYLON.Vector3(0.5, -0.4, 0.8);
@@ -46,7 +45,7 @@
             flashlight.parent = flashModel;
             flashlight.intensity = 0; flashlight.range = 50;
 
-            // --- 3. $1km^2$ CHUNK STREAMING ---
+            // --- 3. CHUNK STREAMING ---
             const chunkSize = 60; const viewDist = 2; const chunks = {};
             const createChunk = (x, z) => {
                 const key = `${x},${z}`;
@@ -57,15 +56,18 @@
                 chunks[key] = g;
             };
 
-            // --- 4. MONSTER ---
+            // --- 4. MONSTER (DI SINI PERUBAHANNYA) ---
             const monMgr = new BABYLON.SpriteManager("monMgr", "assets/monster.png", 1, 512, scene);
             const monster = new BABYLON.Sprite("monster", monMgr);
-            monster.position = new BABYLON.Vector3(20, 3, 40); monster.size = 6;
+            monster.position = new BABYLON.Vector3(20, 3, 40); 
+            monster.size = 6;
 
-            // --- 5. UI SYSTEM (MULTIPLAYER + INV + DEATH) ---
+            // Logika Kecepatan
+            let monsterSpeed = 0.06;      // Kecepatan awal
+            let acceleration = 0.00005;    // Tambahan kecepatan tiap frame
+
+            // --- 5. UI SYSTEM ---
             const adt = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
-
-            // Lobby Utama
             const lobbyRect = new BABYLON.GUI.Rectangle();
             lobbyRect.width = "100%"; lobbyRect.height = "100%"; lobbyRect.background = "black";
             adt.addControl(lobbyRect);
@@ -87,7 +89,6 @@
             btnM.onPointerUpObservable.add(() => { if(nameInp.text) { mPanel.isVisible = true; stack.isVisible = false; } });
             stack.addControl(btnM);
 
-            // Multiplayer Panel
             const mPanel = new BABYLON.GUI.StackPanel(); mPanel.isVisible = false; lobbyRect.addControl(mPanel);
             const createR = BABYLON.GUI.Button.CreateSimpleButton("c", "CREATE ROOM");
             createR.width = "300px"; createR.height = "50px"; createR.background = "green";
@@ -104,7 +105,6 @@
             startM.width = "200px"; startM.height = "50px"; startM.background = "red"; startM.onPointerUpObservable.add(() => startGame());
             roomUI.addControl(startM);
 
-            // Inventory & Settings
             const invPanel = new BABYLON.GUI.Rectangle(); invPanel.width = "300px"; invPanel.height = "400px"; invPanel.background = "rgba(0,0,0,0.9)"; invPanel.isVisible = false;
             adt.addControl(invPanel);
             const invList = new BABYLON.GUI.StackPanel(); invPanel.addControl(invList);
@@ -124,7 +124,6 @@
             });
             adt.addControl(setBtn);
 
-            // Death Screen
             const dScreen = new BABYLON.GUI.Rectangle(); dScreen.width = "100%"; dScreen.height = "100%"; dScreen.background = "rgba(100,0,0,0.8)"; dScreen.isVisible = false; adt.addControl(dScreen);
             const dTxt = new BABYLON.GUI.TextBlock(); dTxt.color = "white"; dScreen.addControl(dTxt);
 
@@ -135,8 +134,8 @@
 
             window.addEventListener("keydown", (e) => {
                 if(!isAlive) return;
-                if(e.shiftKey) camera.speed = 0.8; // Sprint
-                if(e.keyCode === 32 && camera.position.y <= 5.1) camera.cameraDirection.y += 0.4; // Jump
+                if(e.shiftKey) camera.speed = 0.8; 
+                if(e.keyCode === 32 && camera.position.y <= 5.1) camera.cameraDirection.y += 0.4;
                 if(e.key.toLowerCase() === "r") flashlight.intensity = flashlight.intensity === 0 ? 5 : 0;
             });
             window.addEventListener("keyup", (e) => { if(!e.shiftKey) camera.speed = 0.4; });
@@ -153,12 +152,17 @@
                     }
                 }
 
-                // Chase & Kill
+                // AI Chase & SPEED INCREASING
+                monsterSpeed += acceleration; // INI KUNCINYA: Monster makin cepat tiap detik
+                
                 const dist = BABYLON.Vector3.Distance(monster.position, camera.position);
-                if(dist < 50 && dist > 1.8) {
-                    const dir = camera.position.subtract(monster.position); dir.y = 0;
-                    monster.position.addInPlace(dir.normalize().scale(0.06));
+                if(dist < 60 && dist > 1.8) {
+                    const dir = camera.position.subtract(monster.position); 
+                    dir.y = 0;
+                    // Pakai variabel monsterSpeed yang sudah bertambah
+                    monster.position.addInPlace(dir.normalize().scale(monsterSpeed));
                 }
+                
                 if(dist < 2) {
                     isAlive = false; camera.detachControl(); document.exitPointerLock();
                     dTxt.text = playerName.toUpperCase() + " WAS SLAIN BY MONSTER\n\nF5 TO RESTART";
